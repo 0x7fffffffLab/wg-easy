@@ -1,6 +1,11 @@
+FROM golang:alpine AS build_wireguard_go
+RUN apk update && apk add git make
+RUN git clone https://git.zx2c4.com/wireguard-go
+RUN cd wireguard-go && make all
+
 # As a workaround we have to build on nodejs 18
 # nodejs 20 hangs on build with armv6/armv7
-FROM docker.io/library/node:18-alpine AS build_node_modules
+FROM node:18-alpine AS build_node_modules
 
 # Update npm to latest
 RUN npm install -g npm@latest
@@ -13,9 +18,14 @@ RUN npm ci --omit=dev &&\
 
 # Copy build result to a new image.
 # This saves a lot of disk space.
-FROM docker.io/library/node:20-alpine
+FROM node:20-alpine
 HEALTHCHECK CMD /usr/bin/timeout 5s /bin/sh -c "/usr/bin/wg show | /bin/grep -q interface || exit 1" --interval=1m --timeout=5s --retries=3
 COPY --from=build_node_modules /app /app
+COPY --from=build_wireguard_go /go/wireguard-go/wireguard-go /usr/sbin/wireguard-go
+COPY startup.sh /app/startup.sh
+
+RUN chmod +x /app/startup.sh
+RUN chmod +x /usr/sbin/wireguard-go
 
 # Move node_modules one directory up, so during development
 # we don't have to mount it in a volume.
@@ -39,11 +49,12 @@ RUN apk add --no-cache \
     wireguard-tools
 
 # Use iptables-legacy
-RUN update-alternatives --install /sbin/iptables iptables /sbin/iptables-legacy 10 --slave /sbin/iptables-restore iptables-restore /sbin/iptables-legacy-restore --slave /sbin/iptables-save iptables-save /sbin/iptables-legacy-save
+RUN update-alternatives --install /sbin/iptables iptables /sbin/iptables-legacy 10 --slave /sbin/iptables-restore iptables-restore /sbin/iptables-legacy-restore --slave /sbin/iptables-save iptables-save /sbin/iptables-legacy-saveRUN
 
 # Set Environment
 ENV DEBUG=Server,WireGuard
 
 # Run Web UI
 WORKDIR /app
-CMD ["/usr/bin/dumb-init", "node", "server.js"]
+
+CMD ["/usr/bin/dumb-init", "bash", "startup.sh"]
